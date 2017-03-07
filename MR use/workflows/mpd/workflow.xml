@@ -1,0 +1,178 @@
+<workflow-app name="MPD Diff" xmlns="uri:oozie:workflow:0.4">
+    <global>
+        <job-xml>${hiveSite}</job-xml>
+        <job-xml>${tezSite}</job-xml>
+        <configuration>
+            <property>
+                <name>mapreduce.job.queuename</name>
+                <value>${queueName}</value>
+            </property>
+        </configuration>
+    </global>
+    <start to="mpd_move_old_files"/>
+    <action name="mpd_move_old_files">
+        <shell xmlns="uri:oozie:shell-action:0.1">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <exec>massMove.sh</exec>
+            <argument>${mpdBaseDir}/pending</argument>
+            <argument>${mpdBaseDir}/complete</argument>
+            <argument>1</argument>
+            <file>massMove.sh#massMove.sh</file>
+        </shell>
+        <ok to="mpd_move_pending_file"/>
+        <error to="failureEmail"/>
+    </action>
+    <!-- Use this rather than an FS action to avoid errors when there are no files -->
+    <action name="mpd_move_pending_file">
+        <shell xmlns="uri:oozie:shell-action:0.1">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <exec>massMove.sh</exec>
+            <argument>${mpdBaseDir}/pending</argument>
+            <argument>${mpdBaseDir}/currentFile</argument>
+            <argument>0</argument>
+            <file>massMove.sh#massMove.sh</file>
+        </shell>
+        <ok to="mpd_validate_current_file"/>
+        <error to="failureEmail"/>
+    </action>
+    <action name="mpd_validate_current_file">
+        <shell xmlns="uri:oozie:shell-action:0.1">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <exec>validateCurrentFile.sh</exec>
+            <argument>${mpdBaseDir}/currentFile</argument>
+            <argument>${mpdBaseDir}/complete</argument>
+            <argument>1</argument>
+            <file>validateCurrentFile.sh#validateCurrentFile.sh</file>
+            <capture-output/>
+        </shell>
+        <ok to="mpd_diff"/>
+        <error to="failureEmail"/>
+    </action>
+    <action name="mpd_diff">
+        <shell xmlns="uri:oozie:shell-action:0.1">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <prepare>
+                <delete path="${mpdBaseDir}/output"/>
+            </prepare>
+            <exec>mapreduceWrapper.sh</exec>
+            <argument>${cluster}</argument>
+            <argument>${userKeytab}</argument>
+            <argument>${hadoopHome}</argument>
+            <argument>${mpdBaseDir}/currentFile/</argument>
+            <argument>${mpdBaseDir}/previousFile/</argument>
+            <argument>${mpdBaseDir}/output</argument>
+            <argument>${queueName}</argument>
+            <argument>${userName}</argument>
+            <argument>${mpdJar}</argument>
+            <file>mapreduceWrapper.sh#mapreduceWrapper.sh</file>
+        </shell>
+        <ok to="export_diff"/>
+        <error to="failureEmail"/>
+    </action>
+    <action name="export_diff">
+        <shell xmlns="uri:oozie:shell-action:0.1">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <exec>massCopy.sh</exec>
+            <argument>${mpdBaseDir}/output</argument>
+            <argument>${egressDir}</argument>
+            <argument>${egressFileSuffix}</argument>
+            <file>massCopy.sh#massCopy.sh</file>
+        </shell>
+        <ok to="mpd_move_previous_file"/>
+        <error to="failureEmail"/>
+    </action>
+    <action name="mpd_move_previous_file">
+        <shell xmlns="uri:oozie:shell-action:0.1">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <exec>massMove.sh</exec>
+            <argument>${mpdBaseDir}/previousFile</argument>
+            <argument>${mpdBaseDir}/complete</argument>
+            <argument>0</argument>
+            <file>massMove.sh#massMove.sh</file>
+        </shell>
+        <ok to="mpd_move_current_file"/>
+        <error to="failureEmail"/>
+    </action>
+    <action name="mpd_move_current_file">
+        <shell xmlns="uri:oozie:shell-action:0.1">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <exec>massMove.sh</exec>
+            <argument>${mpdBaseDir}/currentFile</argument>
+            <argument>${mpdBaseDir}/previousFile</argument>
+            <argument>0</argument>
+            <file>massMove.sh#massMove.sh</file>
+        </shell>
+        <ok to="getItemCount"/>
+        <error to="failureEmail"/>
+    </action>
+    <action name="getItemCount">
+        <shell xmlns="uri:oozie:shell-action:0.1">
+            <job-tracker>${jobTracker}</job-tracker>
+            <name-node>${nameNode}</name-node>
+            <exec>hive_hbase_query.sh</exec>
+            <argument>${cluster}</argument>
+            <argument>${alertQueryDirectory}</argument>
+            <argument>itemsChanged.hql</argument>
+            <argument>ENGINE=${engine}</argument>
+            <argument>QUEUE_NAME=${queueName}</argument>
+            <argument>ETL_DATABASE=${esvDatabase}</argument>
+            <argument>${userKeytab}</argument>
+            <argument>${hadoopHome}</argument>
+            <argument>${hiveHome}</argument>
+            <argument>${hcatHome}</argument>
+            <argument>${tezHome}</argument>
+            <argument>${wf:user()}</argument>
+            <file>${alertQueryDirectory}/hive_hbase_query.sh#hive_hbase_query.sh</file>
+            <capture-output/>
+        </shell>
+        <ok to="email_report"/>
+        <error to="failureEmail"/>
+    </action>
+    <action name="email_report">
+        <email xmlns="uri:oozie:email-action:0.1">
+            <to>${jobFailureEmails}</to>
+            <subject>MPD Job Results</subject>
+            <body>
+                MPD Job completed successfully. Totally ${(wf:actionData('getItemCount')['itemsCount'])} number of items generated.
+
+                This is an automatic e-mail generated by the job.
+            </body>
+        </email>
+        <ok to="end"/>
+        <error to="kill"/>
+    </action>
+    <action name="failureEmail">
+        <email xmlns="uri:oozie:email-action:0.1">
+            <to>${jobFailureEmails}</to>
+            <subject>MPD JOB FAILURE</subject>
+            <body>
+
+                Error message is: [${wf:errorMessage(wf:lastErrorNode())}]
+
+                ${(wf:actionData('mpd_validate_current_file')['message'])}
+
+                Oozie job id: ${wf:id()}
+
+                External Job Id is ${wf:actionExternalId(wf:lastErrorNode())}
+
+                Job log location is
+                http://d-3zktk02.target.com:19888/jobhistory/job/${wf:actionExternalId(wf:lastErrorNode())}
+
+                This is an automatic e-mail generated by the job.
+            </body>
+        </email>
+        <ok to="end"/>
+        <error to="kill"/>
+    </action>
+    <kill name="kill">
+        <message>Action failed, error message[${wf:errorMessage(wf:lastErrorNode())}]</message>
+    </kill>
+    <end name="end"/>
+</workflow-app>

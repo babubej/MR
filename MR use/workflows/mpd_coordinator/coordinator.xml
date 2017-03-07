@@ -1,0 +1,14 @@
+<coordinator-app name="mpd-coord" frequency="${coord:days(1)}"
+                 start="2015-04-29T06:01Z" end="2099-12-31T00:01Z" timezone="America/Chicago"
+                 xmlns="uri:oozie:coordinator:0.2">
+    <controls>
+        <timeout>10</timeout>
+        <concurrency>1</concurrency>
+        <execution>LAST_ONLY</execution>
+    </controls>
+    <action>
+        <workflow>
+            <app-path>${wf_app_path}</app-path>
+        </workflow>
+    </action>
+</coordinator-app>
